@@ -6,7 +6,10 @@ const msgEl = document.getElementById('msg');
 const sendBtn = document.getElementById('send');
 const typingEl = document.getElementById('typing');
 const bannerEl = document.getElementById('banner');
+const bannerTextEl = document.getElementById('banner-text');
+const bannerConfigureBtn = document.getElementById('banner-configure-key');
 const btnClose = document.getElementById('btn-close');
+const btnApiSettings = document.getElementById('btn-api-settings');
 const sectionAi = document.getElementById('section-ai');
 const sectionText = document.getElementById('section-text');
 const sectionLens = document.getElementById('section-lens');
@@ -25,6 +28,12 @@ const lensLoadingEl = document.getElementById('lens-loading');
 const lensErrorEl = document.getElementById('lens-error');
 const modelModeSelect = document.getElementById('ai-model-mode');
 const modelSelectWrap = document.querySelector('.model-select-wrap');
+const apiSettingsEl = document.getElementById('api-settings');
+const apiKeyStatusEl = document.getElementById('api-key-status');
+const apiKeyNoteEl = document.getElementById('api-key-note');
+const groqKeyInput = document.getElementById('groq-key-input');
+const groqKeySaveBtn = document.getElementById('groq-key-save');
+const groqKeyClearBtn = document.getElementById('groq-key-clear');
 
 let imageDataUrl = '';
 let messages = [];
@@ -37,6 +46,8 @@ let lensSessionPending = false;
 let lensUploadPhase = false;
 /** Open default browser once if embedded Lens cannot load (Google often blocks webviews). */
 let lensEmbedFallbackOpened = false;
+let apiSettingsOpen = false;
+let groqKeyState = null;
 
 /** Plain text for Copy (OCR may include markdown-style text we render as HTML). */
 let lastExtractedPlainText = '';
@@ -211,17 +222,137 @@ async function refreshApiBanner() {
     const { mode } = await window.snapsense.getModelMode();
     if (mode === 'test') {
       bannerEl.classList.remove('visible');
+      bannerConfigureBtn.hidden = true;
       return;
     }
     const s = await window.snapsense.getApiKeyStatus();
     if (s.isDummy || !s.configured) {
-      bannerEl.textContent = 'Groq API key is missing or invalid.';
+      bannerTextEl.textContent = 'Groq API key is missing or invalid.';
+      bannerConfigureBtn.hidden = false;
       bannerEl.classList.add('visible');
     } else {
+      bannerTextEl.textContent = '';
+      bannerConfigureBtn.hidden = true;
       bannerEl.classList.remove('visible');
     }
   } catch {
+    bannerTextEl.textContent = '';
+    bannerConfigureBtn.hidden = true;
     bannerEl.classList.remove('visible');
+  }
+}
+
+function setApiSettingsOpen(open) {
+  apiSettingsOpen = Boolean(open);
+  const visible = apiSettingsOpen && appWrap?.dataset.mode === 'ai';
+  if (apiSettingsEl) {
+    apiSettingsEl.hidden = !visible;
+  }
+  if (btnApiSettings) {
+    btnApiSettings.classList.toggle('active', visible);
+  }
+}
+
+function focusGroqKeyInput() {
+  if (!groqKeyInput) return;
+  groqKeyInput.focus();
+  groqKeyInput.select();
+}
+
+function renderGroqKeyState(state, noteOverride = '') {
+  groqKeyState = state || null;
+  if (!apiKeyStatusEl || !apiKeyNoteEl || !groqKeyClearBtn || !groqKeyInput) return;
+
+  if (!state || state.source === 'none') {
+    apiKeyStatusEl.textContent = 'No Groq key saved yet.';
+    apiKeyNoteEl.textContent =
+      noteOverride || 'Saved locally in your SnapSense app data for this device profile.';
+    groqKeyInput.placeholder = 'Paste Groq API key';
+    groqKeyClearBtn.disabled = true;
+    return;
+  }
+
+  if (state.isDummy) {
+    if (state.source === 'saved') {
+      apiKeyStatusEl.textContent = 'Saved Groq key looks invalid.';
+      apiKeyNoteEl.textContent =
+        noteOverride || 'Replace or clear the saved key to restore AI mode.';
+      groqKeyInput.placeholder = 'Replace saved Groq API key';
+      groqKeyClearBtn.disabled = false;
+      return;
+    }
+    apiKeyStatusEl.textContent = 'Environment Groq key looks invalid.';
+    apiKeyNoteEl.textContent =
+      noteOverride || 'Save a valid key here to override the environment key for SnapSense.';
+    groqKeyInput.placeholder = 'Save a local Groq API key';
+    groqKeyClearBtn.disabled = true;
+    return;
+  }
+
+  if (state.source === 'saved') {
+    apiKeyStatusEl.textContent = 'Groq key saved locally.';
+    apiKeyNoteEl.textContent =
+      noteOverride || 'This stored key is used by SnapSense on this device.';
+    groqKeyInput.placeholder = 'Replace saved Groq API key';
+    groqKeyClearBtn.disabled = false;
+    return;
+  }
+
+  apiKeyStatusEl.textContent = 'Using environment Groq key.';
+  apiKeyNoteEl.textContent =
+    noteOverride || 'Saving a key here will override the environment key for SnapSense.';
+  groqKeyInput.placeholder = 'Save a local Groq API key';
+  groqKeyClearBtn.disabled = true;
+}
+
+async function refreshGroqKeyState(noteOverride = '') {
+  try {
+    const state = await window.snapsense.getGroqKeyState();
+    renderGroqKeyState(state, noteOverride);
+  } catch (e) {
+    renderGroqKeyState(null, noteOverride || (e?.message || 'Could not read API key status.'));
+  }
+}
+
+async function saveGroqKeyFromInput() {
+  const key = (groqKeyInput?.value || '').trim();
+  if (!key) {
+    renderGroqKeyState(groqKeyState, 'Paste a Groq API key first.');
+    setApiSettingsOpen(true);
+    focusGroqKeyInput();
+    return;
+  }
+
+  groqKeySaveBtn.disabled = true;
+  groqKeyClearBtn.disabled = true;
+  try {
+    await window.snapsense.saveGroqKey(key);
+    groqKeyInput.value = '';
+    await refreshGroqKeyState('Groq key saved locally.');
+    await refreshApiBanner();
+  } catch (e) {
+    renderGroqKeyState(groqKeyState, e?.message || 'Could not save Groq API key.');
+  } finally {
+    groqKeySaveBtn.disabled = false;
+    groqKeyClearBtn.disabled = !groqKeyState?.hasStoredKey;
+  }
+}
+
+async function clearSavedGroqKey() {
+  groqKeySaveBtn.disabled = true;
+  groqKeyClearBtn.disabled = true;
+  try {
+    await window.snapsense.clearGroqKey();
+    if (groqKeyInput) {
+      groqKeyInput.value = '';
+    }
+    await refreshGroqKeyState('Saved Groq key removed.');
+    await refreshApiBanner();
+  } catch (e) {
+    renderGroqKeyState(groqKeyState, e?.message || 'Could not clear Groq API key.');
+  } finally {
+    groqKeySaveBtn.disabled = false;
+    groqKeyClearBtn.disabled = !groqKeyState?.hasStoredKey;
   }
 }
 
@@ -412,11 +543,17 @@ function applyMode(mode) {
     appWrap.dataset.mode = m;
   }
   bannerEl.hidden = m !== 'ai';
+  if (btnApiSettings) {
+    btnApiSettings.hidden = m !== 'ai';
+  }
   if (modelSelectWrap) {
     modelSelectWrap.hidden = m !== 'ai';
   }
   if (m !== 'ai') {
     bannerEl.classList.remove('visible');
+    setApiSettingsOpen(false);
+  } else {
+    setApiSettingsOpen(apiSettingsOpen);
   }
   return m;
 }
@@ -477,6 +614,7 @@ function onOpen(payload) {
       msgEl.focus();
     });
   syncModelSelectFromMain();
+  refreshGroqKeyState();
   refreshApiBanner();
 }
 
@@ -494,6 +632,39 @@ window.addEventListener('keydown', (e) => {
   }
 });
 btnClose.addEventListener('click', () => window.snapsense.closePanel());
+if (btnApiSettings) {
+  btnApiSettings.addEventListener('click', () => {
+    const next = !apiSettingsOpen;
+    setApiSettingsOpen(next);
+    if (next) {
+      focusGroqKeyInput();
+    }
+  });
+}
+if (bannerConfigureBtn) {
+  bannerConfigureBtn.addEventListener('click', () => {
+    setApiSettingsOpen(true);
+    focusGroqKeyInput();
+  });
+}
+if (groqKeySaveBtn) {
+  groqKeySaveBtn.addEventListener('click', () => {
+    saveGroqKeyFromInput();
+  });
+}
+if (groqKeyInput) {
+  groqKeyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveGroqKeyFromInput();
+    }
+  });
+}
+if (groqKeyClearBtn) {
+  groqKeyClearBtn.addEventListener('click', () => {
+    clearSavedGroqKey();
+  });
+}
 textCopyBtn.addEventListener('click', async () => {
   const text = (lastExtractedPlainText || textOutputEl.textContent || '').trim();
   if (!text) return;
@@ -596,6 +767,8 @@ if (modelModeSelect) {
 
 const off = window.snapsense.onPanelOpen((payload) => onOpen(payload));
 syncModelSelectFromMain();
+refreshGroqKeyState();
+refreshApiBanner();
 window.addEventListener('resize', () => {
   if (appWrap && appWrap.dataset.mode === 'lens') {
     applyLensWebviewZoom();

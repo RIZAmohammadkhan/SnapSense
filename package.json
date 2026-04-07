@@ -7,23 +7,29 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "pack": "node scripts/bake-key-for-dist.js && electron-builder --dir && node scripts/clear-baked-key.js",
-    "dist": "node scripts/bake-key-for-dist.js && electron-builder --win --x64 && node scripts/clear-baked-key.js"
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win nsis --x64",
+    "dist:linux": "electron-builder --linux AppImage",
+    "dist:mac": "electron-builder --mac dmg zip"
   },
   "build": {
     "appId": "com.snapsense.app",
     "productName": "SnapSense",
-    "icon": "assets/icon.png",
+    "icon": "icon.png",
     "copyright": "Copyright © SnapSense",
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "assets"
     },
     "files": [
       "src/**/*",
+      "config/**/*",
       "assets/**/*",
       "package.json"
     ],
     "win": {
+      "icon": "icon.png",
       "signAndEditExecutable": false,
       "target": [
         {
@@ -34,6 +40,22 @@
         }
       ],
       "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "mac": {
+      "icon": "icon.png",
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "linux": {
+      "icon": "icon.png",
+      "category": "Utility",
+      "target": [
+        "AppImage"
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

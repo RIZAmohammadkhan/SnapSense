@@ -45,6 +45,9 @@ contextBridge.exposeInMainWorld('snapsense', {
   openExternal: (url) => ipcRenderer.invoke('open-external', { url }),
   openLensInBrowser: (imageDataUrl) => ipcRenderer.invoke('open-lens-in-browser', { imageDataUrl }),
   getApiKeyStatus: () => ipcRenderer.invoke('get-api-key-status'),
+  getGroqKeyState: () => ipcRenderer.invoke('get-groq-key-state'),
+  saveGroqKey: (key) => ipcRenderer.invoke('save-groq-key', { key }),
+  clearGroqKey: () => ipcRenderer.invoke('clear-groq-key'),
   getModelMode: () => ipcRenderer.invoke('get-model-mode'),
   setModelMode: (mode) => ipcRenderer.invoke('set-model-mode', { mode }),
   closePanel: () => ipcRenderer.send('panel-close')

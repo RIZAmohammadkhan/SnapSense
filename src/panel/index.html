@@ -25,6 +25,9 @@
           <span>SnapSense · <span id="mode-label">AI</span></span>
         </h1>
         <div class="titlebar-actions">
+          <button type="button" id="btn-api-settings" class="titlebar-chip-btn">
+            Key
+          </button>
           <label class="model-select-wrap">
             <img
               class="img-ico model-ico"
@@ -44,7 +47,30 @@
           </button>
         </div>
       </header>
-      <div id="banner" class="banner"></div>
+      <div id="banner" class="banner">
+        <span id="banner-text"></span>
+        <button type="button" id="banner-configure-key" class="banner-action-btn" hidden>
+          Add key
+        </button>
+      </div>
+      <section id="api-settings" class="api-settings" hidden>
+        <div class="api-settings-head">
+          <p id="api-key-status" class="api-settings-status"></p>
+          <p id="api-key-note" class="api-settings-note"></p>
+        </div>
+        <div class="api-settings-row">
+          <input
+            type="password"
+            id="groq-key-input"
+            class="api-key-input"
+            placeholder="Paste Groq API key"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button type="button" id="groq-key-save" class="btn-with-ico api-save-btn">Save</button>
+          <button type="button" id="groq-key-clear" class="api-clear-btn">Clear</button>
+        </div>
+      </section>
       <div class="panel-body" id="section-ai">
         <div class="chat-scroll" id="chat"></div>
         <div class="typing" id="typing" hidden>

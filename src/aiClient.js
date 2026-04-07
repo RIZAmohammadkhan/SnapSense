@@ -1,25 +1,52 @@
 const fs = require('fs');
 const path = require('path');
+let electronApp = null;
+try {
+  ({ app: electronApp } = require('electron'));
+} catch {
+  electronApp = null;
+}
 
 const DUMMY_GROQ_KEY = 'groq-dummy-replace-with-your-key';
 const DEFAULT_GROQ_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 const PROMPTS_PATH = path.join(__dirname, '..', 'config', 'ai-prompts.json');
-const SETTINGS_PATH = path.join(__dirname, '..', 'config', 'ai-settings.json');
+const LEGACY_SETTINGS_PATH = path.join(__dirname, '..', 'config', 'ai-settings.json');
+const DEFAULT_SETTINGS = {
+  modelMode: 'groq',
+  stealthMode: true
+};
 
-/** Populated only when `npm run dist` / `pack` runs `scripts/bake-key-for-dist.js` (file is gitignored). */
-function getBakedGroqKey() {
+function getSettingsPath() {
   try {
-    return String(require('./baked-groq-key')).trim();
+    if (electronApp && typeof electronApp.getPath === 'function') {
+      return path.join(electronApp.getPath('userData'), 'ai-settings.json');
+    }
   } catch {
-    return '';
+    /* fall through */
   }
+  return LEGACY_SETTINGS_PATH;
+}
+
+function readSettings() {
+  const base = readJsonSafe(LEGACY_SETTINGS_PATH, DEFAULT_SETTINGS);
+  const active = readJsonSafe(getSettingsPath(), {});
+  return {
+    ...DEFAULT_SETTINGS,
+    ...base,
+    ...active
+  };
+}
+
+function writeSettings(value) {
+  writeJsonSafe(getSettingsPath(), value);
 }
 
 function getGroqKey() {
+  const settings = readSettings();
+  const saved = String(settings.groqKey || '').trim();
+  if (saved) return saved;
   const env = (process.env.GROQ_KEY || '').trim();
   if (env) return env;
-  const baked = getBakedGroqKey();
-  if (baked) return baked;
   return DUMMY_GROQ_KEY;
 }
 
@@ -42,11 +69,11 @@ function writeJsonSafe(filePath, value) {
 }
 
 function getModelMode() {
-  const settings = readJsonSafe(SETTINGS_PATH, {});
+  const settings = readSettings();
   const m = settings.modelMode;
   if (m === 'openai') {
     settings.modelMode = 'groq';
-    writeJsonSafe(SETTINGS_PATH, settings);
+    writeSettings(settings);
     return 'groq';
   }
   if (m === 'test') return 'test';
@@ -55,10 +82,60 @@ function getModelMode() {
 
 function setModelMode(mode) {
   const normalized = mode === 'test' ? 'test' : 'groq';
-  const settings = readJsonSafe(SETTINGS_PATH, {});
+  const settings = readSettings();
   settings.modelMode = normalized;
-  writeJsonSafe(SETTINGS_PATH, settings);
+  writeSettings(settings);
   return normalized;
+}
+
+function getStealthMode() {
+  const settings = readSettings();
+  if (typeof settings.stealthMode === 'boolean') {
+    return settings.stealthMode;
+  }
+  settings.stealthMode = true;
+  writeSettings(settings);
+  return true;
+}
+
+function setStealthMode(enabled) {
+  const settings = readSettings();
+  settings.stealthMode = Boolean(enabled);
+  writeSettings(settings);
+  return settings.stealthMode;
+}
+
+function getGroqKeyState() {
+  const settings = readSettings();
+  const saved = String(settings.groqKey || '').trim();
+  const env = String(process.env.GROQ_KEY || '').trim();
+  const activeKey = saved || env || '';
+  const source = saved ? 'saved' : env ? 'env' : 'none';
+  const isDummy = !activeKey || activeKey === DUMMY_GROQ_KEY || activeKey.length < 20;
+  return {
+    configured: Boolean(activeKey && !isDummy),
+    hasStoredKey: Boolean(saved),
+    source,
+    isDummy
+  };
+}
+
+function setGroqKey(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized || normalized.length < 20 || normalized === DUMMY_GROQ_KEY) {
+    throw new Error('Enter a valid Groq API key.');
+  }
+  const settings = readSettings();
+  settings.groqKey = normalized;
+  writeSettings(settings);
+  return getGroqKeyState();
+}
+
+function clearGroqKey() {
+  const settings = readSettings();
+  delete settings.groqKey;
+  writeSettings(settings);
+  return getGroqKeyState();
 }
 
 function getGroqModel() {
@@ -84,11 +161,12 @@ function getAiKeyStatus() {
   if (mode === 'test') {
     return { configured: true, isDummy: false, provider: 'test' };
   }
-  const key = getGroqKey();
-  const isDummy = !key || key === DUMMY_GROQ_KEY || key.length < 20;
+  const keyState = getGroqKeyState();
   return {
-    configured: Boolean(key && !isDummy),
-    isDummy,
+    configured: keyState.configured,
+    isDummy: keyState.isDummy,
+    source: keyState.source,
+    hasStoredKey: keyState.hasStoredKey,
     provider: 'groq'
   };
 }
@@ -198,8 +276,13 @@ async function requestAi(messages, maxTokens = 4096, logger = null, mode = 'chat
 
 module.exports = {
   getAiKeyStatus,
+  getGroqKeyState,
+  setGroqKey,
+  clearGroqKey,
   getModelMode,
   setModelMode,
+  getStealthMode,
+  setStealthMode,
   getPrompt,
   requestAi
 };

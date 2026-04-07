@@ -16,13 +16,26 @@ const https = require('https');
 const path = require('path');
 const fs = require('fs');
 const log = require('./logger');
-const { getAiKeyStatus, getPrompt, requestAi, getModelMode, setModelMode } = require('./aiClient');
+const {
+  getAiKeyStatus,
+  getGroqKeyState,
+  setGroqKey,
+  clearGroqKey,
+  getPrompt,
+  requestAi,
+  getModelMode,
+  setModelMode,
+  getStealthMode,
+  setStealthMode
+} = require('./aiClient');
 
 const CAPTURE_PRELOAD = path.join(__dirname, 'preload.js');
 const PANEL_PRELOAD = path.join(__dirname, 'preload.js');
 const CAPTURE_HTML = path.join(__dirname, 'capture', 'index.html');
 const PANEL_HTML = path.join(__dirname, 'panel', 'index.html');
 const MODE_STRIP_HTML = path.join(__dirname, 'mode-strip', 'index.html');
+const CAPTURE_SHORTCUT_ACCELERATOR = 'Super+Alt+S';
+const STEALTH_MODE_SUPPORTED = process.platform === 'win32' || process.platform === 'darwin';
 
 function loadEnvFile() {
   try {
@@ -98,6 +111,7 @@ let modeStripWin = null;
 let panelWin = null;
 /** Mode chosen in floating strip during active capture */
 let captureSessionMode = 'ai';
+let stealthModeEnabled = getStealthMode();
 let captureEscapeShortcutRegistered = false;
 /** Incremented on each capture start so stale async work cannot open duplicate windows */
 let captureFlowGeneration = 0;
@@ -116,6 +130,103 @@ function unregisterCaptureEscapeShortcut() {
     globalShortcut.unregister('Escape');
     captureEscapeShortcutRegistered = false;
   }
+}
+
+function captureShortcutLabel() {
+  if (process.platform === 'darwin') return 'Cmd+Option+S';
+  if (process.platform === 'win32') return 'Win+Alt+S';
+  return 'Super+Alt+S';
+}
+
+function applyStealthModeToWindow(win, windowName) {
+  if (!win || win.isDestroyed()) return;
+  if (!STEALTH_MODE_SUPPORTED) {
+    if (stealthModeEnabled) {
+      log.info('main', 'Stealth mode is not supported on this platform', {
+        window: windowName,
+        platform: process.platform
+      });
+    }
+    return;
+  }
+  try {
+    win.setContentProtection(stealthModeEnabled);
+    log.info('main', 'Window content protection updated', {
+      window: windowName,
+      enabled: stealthModeEnabled,
+      platform: process.platform
+    });
+  } catch (e) {
+    log.warn('main', 'Failed to update window content protection', {
+      window: windowName,
+      enabled: stealthModeEnabled,
+      platform: process.platform,
+      message: e.message
+    });
+  }
+}
+
+function applyStealthModeToOpenWindows() {
+  applyStealthModeToWindow(captureWin, 'capture');
+  applyStealthModeToWindow(modeStripWin, 'mode-strip');
+  applyStealthModeToWindow(panelWin, 'panel');
+}
+
+function refreshTrayMenu() {
+  if (!tray) return;
+  tray.setContextMenu(buildTrayMenu());
+}
+
+function updateStealthMode(enabled) {
+  stealthModeEnabled = setStealthMode(enabled);
+  applyStealthModeToOpenWindows();
+  refreshTrayMenu();
+  log.info('main', 'Stealth mode changed', {
+    enabled: stealthModeEnabled,
+    platform: process.platform
+  });
+  return stealthModeEnabled;
+}
+
+function buildInstallMenuItems() {
+  const items = [
+    {
+      label: 'Reveal app in file manager',
+      click: () => {
+        shell.showItemInFolder(app.getPath('exe'));
+      }
+    }
+  ];
+  if (process.platform === 'win32') {
+    items.push({
+      label: 'Open Start Menu (SnapSense)',
+      click: () => {
+        const programs = path.join(
+          process.env.APPDATA || '',
+          'Microsoft',
+          'Windows',
+          'Start Menu',
+          'Programs'
+        );
+        const category = path.join(programs, 'SnapSense');
+        const target = fs.existsSync(category) ? category : programs;
+        shell.openPath(target).then((errMsg) => {
+          if (errMsg) log.warn('main', 'openPath Start Menu', { err: errMsg });
+        });
+      }
+    });
+  }
+  if (process.platform === 'darwin') {
+    items.push({
+      label: 'Open Applications folder',
+      click: () => {
+        shell.openPath('/Applications').then((errMsg) => {
+          if (errMsg) log.warn('main', 'openPath Applications', { err: errMsg });
+        });
+      }
+    });
+  }
+  return items;
 }
 
 function registerCaptureEscapeShortcut() {
@@ -710,6 +821,7 @@ function createModeStripWindow() {
     }
   });
 
+  applyStealthModeToWindow(modeStripWin, 'mode-strip');
   modeStripWin.setAlwaysOnTop(true, 'pop-up-menu');
   modeStripWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
@@ -770,6 +882,7 @@ function createCaptureWindow(sourceId) {
     }
   });
 
+  applyStealthModeToWindow(captureWin, 'capture');
   captureWin.setAlwaysOnTop(true, 'screen-saver');
   captureWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   captureWin.setBounds(display.bounds);
@@ -835,6 +948,7 @@ function createPanelWindow(payload) {
     }
   });
 
+  applyStealthModeToWindow(panelWin, 'panel');
   panelWin.loadFile(PANEL_HTML).catch((e) => log.error('main', 'loadFile panel', e));
 
   panelWin.webContents.once('did-finish-load', () => {
@@ -885,7 +999,7 @@ async function startCaptureFlow() {
 }
 
 function registerShortcut() {
-  const accel = 'Super+Alt+S';
+  const accel = CAPTURE_SHORTCUT_ACCELERATOR;
   const ok = globalShortcut.register(accel, () => {
     log.info('main', 'Global shortcut', accel);
     startCaptureFlow();
@@ -904,42 +1018,32 @@ function buildTray() {
     icon = nativeImage.createEmpty();
   }
   tray = new Tray(icon);
-  tray.setToolTip('SnapSense — Win+Alt+S to capture');
-  const menu = Menu.buildFromTemplate([
+  tray.setToolTip(`SnapSense — ${captureShortcutLabel()} to capture`);
+  refreshTrayMenu();
+  tray.on('click', () => {
+    startCaptureFlow();
+  });
+}
+
+function buildTrayMenu() {
+  return Menu.buildFromTemplate([
     {
-      label: 'Capture region',
+      label: `Capture region (${captureShortcutLabel()})`,
       click: () => startCaptureFlow()
     },
     {
+      type: 'checkbox',
+      label: STEALTH_MODE_SUPPORTED
+        ? 'Stealth mode (hide from screen capture)'
+        : 'Stealth mode (unsupported on Linux)',
+      checked: stealthModeEnabled,
+      click: (menuItem) => {
+        updateStealthMode(menuItem.checked);
+      }
+    },
+    {
       label: 'Installation',
-      submenu: [
-        {
-          label: 'Open install folder',
-          click: () => {
-            const dir = path.dirname(app.getPath('exe'));
-            shell.openPath(dir).then((errMsg) => {
-              if (errMsg) log.warn('main', 'openPath install folder', { err: errMsg });
-            });
-          }
-        },
-        {
-          label: 'Open Start Menu (SnapSense)',
-          click: () => {
-            const programs = path.join(
-              process.env.APPDATA || '',
-              'Microsoft',
-              'Windows',
-              'Start Menu',
-              'Programs'
-            );
-            const category = path.join(programs, 'SnapSense');
-            const target = fs.existsSync(category) ? category : programs;
-            shell.openPath(target).then((errMsg) => {
-              if (errMsg) log.warn('main', 'openPath Start Menu', { err: errMsg });
-            });
-          }
-        }
-      ]
+      submenu: buildInstallMenuItems()
     },
     { type: 'separator' },
     {
@@ -947,10 +1051,6 @@ function buildTray() {
       click: () => app.quit()
     }
   ]);
-  tray.setContextMenu(menu);
-  tray.on('click', () => {
-    startCaptureFlow();
-  });
 }
 
 function setupIpc() {
@@ -968,6 +1068,12 @@ function setupIpc() {
   ipcMain.handle('get-model-mode', () => ({ mode: getModelMode() }));
 
   ipcMain.handle('set-model-mode', (_evt, { mode }) => ({ mode: setModelMode(mode) }));
+
+  ipcMain.handle('get-groq-key-state', () => getGroqKeyState());
+
+  ipcMain.handle('save-groq-key', (_evt, { key }) => setGroqKey(key));
+
+  ipcMain.handle('clear-groq-key', () => clearGroqKey());
 
   async function handleExtractText(imageDataUrl) {
     if (!imageDataUrl) {

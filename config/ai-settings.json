@@ -1,3 +1,4 @@
 {
-  "modelMode": "groq"
+  "modelMode": "groq",
+  "stealthMode": true
 }
